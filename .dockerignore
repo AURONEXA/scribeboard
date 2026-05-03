@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+.env
+.git
+.github
+tests
+coverage
+.eslintrc.json
+.prettierrc
+stryker.config.json
+jest.config.js
+Dockerfile
+.dockerignore
+kubernetes

@@ -31,6 +31,11 @@ if (config.env !== 'test') {
 // API routes
 app.use(config.api.prefix, routes);
 
+// Health check endpoint used by Kubernetes Liveness/Readiness probes and CI/CD smoke tests
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'UP', timestamp: new Date().toISOString() });
+});
+
 // Root endpoint
 app.get('/', (req, res) => {
   res.json({

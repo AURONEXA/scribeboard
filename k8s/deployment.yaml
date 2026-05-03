@@ -1,0 +1,94 @@
+# Kubernetes API version for Deployments
+apiVersion: apps/v1
+# Type of resource
+kind: Deployment
+metadata:
+  # Unique name for the deployment
+  name: scribeboard-api
+  labels:
+    # Tagging the resource for identification
+    app: scribeboard
+spec:
+  # Maintain 3 identical copies of the pod for high availability
+  replicas: 3
+  selector:
+    # Match labels to identify which pods belong to this deployment
+    matchLabels:
+      app: scribeboard
+  # Strategy for updating pods without downtime
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Allow 1 extra pod to be created during update
+      maxSurge: 1
+      # Ensure 0 pods are taken down before the new one is ready
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        # Label applied to the pods
+        app: scribeboard
+    spec:
+      # SECURITY: Disable automatic mounting of service account tokens to prevent lateral movement
+      automountServiceAccountToken: false
+      containers:
+      - # Name of the container
+        name: api
+        # Image placeholder (replaced by CI/CD pipeline)
+        image: ${IMAGE_NAME}:${IMAGE_TAG}
+        ports:
+        - # Port the container exposes
+          containerPort: 3000
+        envFrom:
+        - # Inject environment variables from ConfigMap
+          configMapRef:
+            name: scribeboard-config
+        - # Inject secrets from Kubernetes Secret store
+          secretRef:
+            name: scribeboard-secrets
+        resources:
+          # Maximum hardware usage allowed
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+            ephemeral-storage: "1Gi"
+          # Guaranteed hardware reserved for the container
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+            ephemeral-storage: "512Mi"
+        # Checks if the app is alive. Restarts container if it fails.
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        # Checks if the app is ready to receive traffic. Stops traffic if it fails.
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+# Kubernetes API version for Services
+apiVersion: v1
+# Type of resource
+kind: Service
+metadata:
+  # Name of the service
+  name: scribeboard-service
+spec:
+  # Expose the service externally via a Cloud Load Balancer
+  type: LoadBalancer
+  selector:
+    # Route traffic to pods with this label
+    app: scribeboard
+  ports:
+  - # Protocol used
+    protocol: TCP
+    # Port exposed on the load balancer
+    port: 80
+    # Port to target on the container
+    targetPort: 3000

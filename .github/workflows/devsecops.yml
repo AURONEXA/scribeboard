@@ -1,0 +1,112 @@
+# High-Assurance DevSecOps Continuous Deployment Pipeline
+name: High-Assurance DevSecOps CD Pipeline
+
+# Trigger the pipeline on every push to the 'main' branch
+on:
+  push:
+    branches: [ main ]
+
+# Global Environment Variables
+env:
+  # Registry to host the Docker images
+  REGISTRY: ghcr.io
+  # The name of the image based on the repository name
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # STAGES 1-10: Security & Quality Gates
+  # This job must pass before we even consider building a container
+  quality-and-security:
+    runs-on: ubuntu-latest
+    steps:
+      - # Checkout the latest code from the repository
+        uses: actions/checkout@v4
+      
+      - # Setup Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - # Clean install of all dependencies
+        run: npm ci
+      
+      - # Stage 1 & 2: Check for code quality and vulnerable dependencies
+        name: Lint & SCA
+        run: |
+          npm run lint
+          npm run security-audit
+      
+      - # Stage 3-5: Validate DB Schema, Generate Client, and Run Unit Tests
+        name: Prisma & Tests
+        run: |
+          npm run prisma:validate
+          npm run db:generate
+          npm run test:coverage
+
+  # STAGE 11: Containerization (Build & Push)
+  # This job builds the Docker image and uploads it to the GitHub Container Registry
+  build-and-push:
+    needs: [quality-and-security]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # Required to push to GHCR
+    steps:
+      - uses: actions/checkout@v4
+      
+      - # Authenticate Docker with GitHub's registry using the built-in GITHUB_TOKEN
+        name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - # Generate dynamic tags (e.g., commit SHA, 'latest') for the image
+        name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long
+            type=ref,event=branch
+            latest
+
+      - # Build the multi-stage Docker image and push it to the registry
+        name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # STAGE 12: Kubernetes Orchestration & Deployment
+  # This final stage applies the updated image to the Kubernetes cluster
+  deploy:
+    needs: [build-and-push]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - # Configure kubectl to connect to your specific cluster
+        name: Set Kubernetes Context
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          # This secret must be added by the user in GitHub Settings
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - # Update the deployment manifest with the fresh image and apply it
+        name: Deploy to Kubernetes
+        run: |
+          # Dynamically swap placeholders in the YAML with the real image path and tag
+          sed -i "s|\${IMAGE_NAME}|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}|g" k8s/deployment.yaml
+          sed -i "s|\${IMAGE_TAG}|sha-${GITHUB_SHA::7}|g" k8s/deployment.yaml
+          
+          # Apply the changes to the cluster
+          kubectl apply -f k8s/deployment.yaml
+          # Wait for the rollout to finish successfully
+          kubectl rollout status deployment/scribeboard-api
